@@ -1,62 +1,69 @@
 from mpi4py import MPI
 import numpy as np
 
-# Initialize MPI
+# MPI setup
 comm = MPI.COMM_WORLD
 rank = comm.Get_rank()
 size = comm.Get_size()
 
-# Parameters
-nx = 1000  # Number of spatial points
-nt = 500  # Number of time steps
-L = 10.0  # Length of the domain
-c = 1.0   # Advection speed
-dx = L / nx
-dt = 0.01
-CFL = c * dt / dx  # CFL number
+# Grid parameters
+nx_global = 100  # Global number of cells
+dx = 1.0         # Cell size
 
 # Domain decomposition
-local_nx = nx // size
+local_nx = nx_global // size
 start = rank * local_nx
-end = start + local_nx
-if rank == size - 1:
-    end = nx  # Ensure the last process gets the remainder if nx is not perfectly divisible
+end = start + local_nx - 1
 
-# Initialize solution array
-u = np.zeros(local_nx + 2)  # Add ghost cells
-unew = np.zeros_like(u)
+# Physical parameters
+velocity = 1.0
+dt = 0.01
+num_steps = 100
 
-# Initial condition: Gaussian pulse
-x = np.linspace(start * dx, (end - 1) * dx, local_nx)
-u[1:-1] = np.exp(-((x - L/2)**2) / (2 * (0.1)**2))
+# Initialize arrays
+phi = np.zeros(local_nx + 2)  # Local solution including ghost cells
+phi_new = np.zeros(local_nx)  # Buffer for updated values
 
-# Time stepping loop
-for t in range(nt):
+# Initial condition
+x = np.linspace(start * dx - 0.5*dx, (end+1) * dx - 0.5*dx, local_nx + 2)
+phi[1:-1] = np.exp(-(x[1:-1] - 1.0)**2 / 0.1**2)  # Example initial condition
+
+# Time integration
+for step in range(num_steps):
     # Communicate ghost cells
     if rank > 0:
-        comm.Sendrecv(u[1], dest=rank-1, sendtag=0, recvbuf=u[0], source=rank-1, recvtag=1)
+        comm.Send([phi[1], MPI.DOUBLE], dest=rank-1, tag=rank)
+        comm.Recv([phi[0], MPI.DOUBLE], source=rank-1, tag=rank-1)
     if rank < size - 1:
-        comm.Sendrecv(u[-2], dest=rank+1, sendtag=1, recvbuf=u[-1], source=rank+1, recvtag=0)
+        comm.Send([phi[-2], MPI.DOUBLE], dest=rank+1, tag=rank)
+        comm.Recv([phi[-1], MPI.DOUBLE], source=rank+1, tag=rank+1)
 
-    # Finite volume update
+    # Compute advection using upwind scheme
     for i in range(1, local_nx + 1):
-        unew[i] = u[i] - CFL * (u[i] - u[i-1])
+        if velocity >= 0:
+            flux = velocity * (phi[i] - phi[i-1]) / dx
+        else:
+            flux = velocity * (phi[i+1] - phi[i]) / dx
+        phi_new[i-1] = phi[i] - dt * flux
 
-    # Update solution
-    u[1:-1] = unew[1:-1]
-
-# Gather results to the root process
-global_u = None
+    # Update phi
+    phi[1:-1] = phi_new[:]
+'''
+# Gather results from all processes to root (rank 0)
 if rank == 0:
-    global_u = np.zeros(nx)
-comm.Gather(u[1:-1], global_u, root=0)
+    full_phi = np.empty(nx_global)
+else:
+    full_phi = None
 
-# Output the result
+comm.Gather([phi[1:-1], MPI.DOUBLE], [full_phi, MPI.DOUBLE], root=0)
+
+# Plot or analyze results (only rank 0 does this)
 if rank == 0:
     import matplotlib.pyplot as plt
-    x_global = np.linspace(0, L, nx)
-    plt.plot(x_global, global_u, label='t={}'.format(nt*dt))
+
+    plt.plot(np.linspace(0, nx_global-1, nx_global) * dx, full_phi)
     plt.xlabel('x')
-    plt.ylabel('u')
-    plt.legend()
+    plt.ylabel('phi')
+    plt.title('Advection Equation Solution')
     plt.show()
+'''
