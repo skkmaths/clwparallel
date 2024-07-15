@@ -35,6 +35,7 @@ def apply_periodic_boundary_conditions(u):
 # Time-stepping loop
 time = 0.0
 while time < T:
+    print("rank =", rank, "time = ", time)
     u_left, u_right = apply_periodic_boundary_conditions(u)
 
     # Send and receive boundary data with neighboring processes
@@ -45,6 +46,7 @@ while time < T:
     if rank < size - 1:
         comm.send(u[-1], dest=rank+1)
         u_right[-1] = comm.recv(source=rank+1)
+    comm.Barrier()
 
     # Update solution using finite volume method
     u_new = u.copy()
